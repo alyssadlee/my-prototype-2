@@ -158,6 +158,30 @@ function AddImageModal({ onSelect, onClose }) {
 }
 
 
+// ── Confirm Exit Modal ────────────────────────────────────────────────────────
+function ConfirmExitModal({ onContinue, onCancel }) {
+  return (
+    <div style={{ ...S.overlay, zIndex:1100 }}>
+      <div style={{ background:"#fff", borderRadius:16, padding:"28px 28px 22px", width:"min(380px,90vw)", boxShadow:"0 8px 40px rgba(0,0,0,0.18)" }}>
+        <div style={{ fontSize:18, fontWeight:700, color:"#111", marginBottom:12 }}>Close without saving?</div>
+        <div style={{ fontSize:16, color:"#444", lineHeight:1.5, marginBottom:28 }}>
+          You have unsaved changes. Are you sure you want to leave?
+        </div>
+        <div style={{ display:"flex", justifyContent:"flex-end", alignItems:"center", gap:12 }}>
+          <button onClick={onCancel}
+            style={{ background:"none", border:"none", fontSize:16, color:"#888", cursor:"pointer", padding:"10px 16px", fontFamily:"inherit", fontWeight:500 }}>
+            Cancel
+          </button>
+          <button onClick={onContinue}
+            style={{ background:"#e53935", color:"#fff", border:"none", borderRadius:12, padding:"12px 28px", fontSize:16, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Voice Recorder Overlay ────────────────────────────────────────────────────
 function VoiceRecorder({ onConfirm, onCancel }) {
   const [recording, setRecording] = useState(false);
@@ -342,6 +366,7 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
   const [current, setCurrent] = useState(null);
   const [noteOpen, setNoteOpen] = useState(false);
   const [recordingHsId, setRecordingHsId] = useState(null);
+  const [confirmExit, setConfirmExit] = useState(false);
   const NOTE_MAX = 400;
 
   const pct = (e) => {
@@ -413,7 +438,9 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
             </svg>
           </button>
         </div>
-        <button onClick={onClose} style={{ ...S.closeBtn, position:"absolute", top:14, right:14, zIndex:20, background:"rgba(28,28,28,0.92)" }}>
+        <button
+          onClick={()=>{ if(hotspots.length > 0 || note.trim().length > 0) { setConfirmExit(true); } else { onClose(); } }}
+          style={{ ...S.closeBtn, position:"absolute", top:14, right:14, zIndex:20, background:"rgba(28,28,28,0.92)" }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
 
@@ -515,6 +542,12 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
             </div>
           </div>
         )}
+      {confirmExit && (
+        <ConfirmExitModal
+          onContinue={()=>{ setConfirmExit(false); onClose(); }}
+          onCancel={()=>setConfirmExit(false)}
+        />
+      )}
       </div>
     </div>
   );
