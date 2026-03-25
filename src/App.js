@@ -157,12 +157,191 @@ function AddImageModal({ onSelect, onClose }) {
   );
 }
 
-function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onClose, onDeleteHs, onEditHs, onPlayHs, onSave, note, onNoteChange }) {
+
+// ── Voice Recorder Overlay ────────────────────────────────────────────────────
+function VoiceRecorder({ onConfirm, onCancel }) {
+  const [recording, setRecording] = useState(false);
+  const [audioURL, setAudioURL] = useState(null);
+  const [playing, setPlaying] = useState(false);
+  const [wavePoints, setWavePoints] = useState([]);
+  const [micStatus, setMicStatus] = useState("idle"); // idle | requesting | denied | unavailable | ready
+  const mediaRecRef = useRef(null);
+  const chunksRef = useRef([]);
+  const audioRef = useRef(null);
+  const animRef = useRef(null);
+  const analyserRef = useRef(null);
+
+  useEffect(() => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setMicStatus("unavailable");
+    }
+  }, []);
+
+  const buildWave = () => {
+    if (!analyserRef.current) return;
+    const buf = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteTimeDomainData(buf);
+    const pts = Array.from({length: 60}, (_, i) => {
+      const idx = Math.floor(i * buf.length / 60);
+      return ((buf[idx] - 128) / 128);
+    });
+    setWavePoints(pts);
+    animRef.current = requestAnimationFrame(buildWave);
+  };
+
+  const startRecording = async () => {
+    setMicStatus("requesting");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setMicStatus("ready");
+      const ctx = new AudioContext();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      analyserRef.current = analyser;
+      chunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mr.ondataavailable = e => chunksRef.current.push(e.data);
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        setAudioURL(URL.createObjectURL(blob));
+        stream.getTracks().forEach(t => t.stop());
+        cancelAnimationFrame(animRef.current);
+      };
+      mr.start();
+      mediaRecRef.current = mr;
+      setRecording(true);
+      setAudioURL(null);
+      setWavePoints([]);
+      buildWave();
+    } catch(e) {
+      const isDenied = e.name === "NotAllowedError" || e.name === "PermissionDeniedError";
+      setMicStatus(isDenied ? "denied" : "unavailable");
+      setRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecRef.current?.stop();
+    setRecording(false);
+    cancelAnimationFrame(animRef.current);
+  };
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (playing) { audioRef.current.pause(); audioRef.current.currentTime = 0; setPlaying(false); }
+    else { audioRef.current.play(); setPlaying(true); }
+  };
+
+  const deleteRecording = () => { setAudioURL(null); setWavePoints([]); setPlaying(false); };
+
+  // SVG waveform path
+  const W = 560, H = 120, mid = H / 2;
+  const wavePath = wavePoints.length > 0
+    ? "M " + wavePoints.map((v, i) => `${(i / (wavePoints.length-1)) * W},${mid + v * (H/2 - 8)}`).join(" L ")
+    : `M 0,${mid} L ${W},${mid}`;
+
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:1060, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div style={{ position:"relative", background:"rgba(235,235,240,0.88)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderRadius:20, padding:"24px 20px 20px", width:"min(640px,94vw)", boxShadow:"0 8px 40px rgba(0,0,0,0.25)" }}>
+        {/* Close */}
+        <button onClick={onCancel} style={{ position:"absolute", top:14, right:14, background:"rgba(80,80,80,0.5)", border:"none", borderRadius:8, width:44, height:44, cursor:"pointer", color:"#fff", display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+
+        {/* Status messages */}
+        {micStatus === "requesting" && (
+          <div style={{ margin:"16px 0", textAlign:"center", color:"#666", fontSize:14 }}>
+            <div style={{ fontSize:28, marginBottom:8 }}>🎙️</div>
+            <div style={{ fontWeight:600, marginBottom:4 }}>Allow microphone access</div>
+            <div style={{ fontSize:12, color:"#999" }}>Check your browser's permission prompt at the top of the screen</div>
+          </div>
+        )}
+        {micStatus === "denied" && (
+          <div style={{ margin:"16px 0", textAlign:"center" }}>
+            <div style={{ fontSize:28, marginBottom:8 }}>🚫</div>
+            <div style={{ fontWeight:600, color:"#e53935", marginBottom:6, fontSize:14 }}>Microphone access blocked</div>
+            <div style={{ fontSize:12, color:"#888", lineHeight:1.5, marginBottom:12 }}>
+              To enable recording, allow microphone access in your browser settings, then try again.
+            </div>
+            <button onClick={()=>setMicStatus("idle")}
+              style={{ background:"#5b9bd5", color:"#fff", border:"none", borderRadius:10, padding:"9px 20px", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+              Try again
+            </button>
+          </div>
+        )}
+        {micStatus === "unavailable" && (
+          <div style={{ margin:"16px 0", textAlign:"center" }}>
+            <div style={{ fontSize:28, marginBottom:8 }}>⚠️</div>
+            <div style={{ fontWeight:600, color:"#e53935", marginBottom:6, fontSize:14 }}>Microphone not available</div>
+            <div style={{ fontSize:12, color:"#888", lineHeight:1.5 }}>
+              Recording requires a microphone and a secure (HTTPS) connection. This feature works on the deployed app.
+            </div>
+          </div>
+        )}
+        {/* Waveform — shown when idle/ready/recording */}
+        {(micStatus === "idle" || micStatus === "ready") && (
+        <div style={{ margin:"8px 0 20px", height:H, display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", height:"100%" }} preserveAspectRatio="none">
+            <line x1="0" y1={mid} x2={W} y2={mid} stroke="rgba(0,0,0,0.15)" strokeWidth="1"/>
+            <path d={wavePath} fill="none" stroke={recording?"#222":"rgba(0,0,0,0.5)"} strokeWidth={recording?2.5:2} strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+        )}
+
+        {/* Controls */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:16 }}>
+          {/* Delete */}
+          <button onClick={deleteRecording} disabled={!audioURL&&!recording}
+            style={{ background:"transparent", border:"none", cursor:audioURL||recording?"pointer":"default", opacity:audioURL||recording?1:0.35, width:44, height:44, display:"flex", alignItems:"center", justifyContent:"center", color:"#444" }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+          </button>
+          {/* Record / Stop */}
+          <button
+            onClick={recording ? stopRecording : startRecording}
+            disabled={micStatus === "unavailable"}
+            style={{ width:60, height:60, borderRadius:"50%", background:micStatus==="unavailable"?"rgba(160,160,160,0.5)":"rgba(80,80,80,0.85)", border:"none", cursor:micStatus==="unavailable"?"default":"pointer", display:"flex", alignItems:"center", justifyContent:"center", boxShadow:"0 2px 12px rgba(0,0,0,0.25)", transition:"transform 0.1s", opacity:micStatus==="requesting"?0.6:1 }}>
+            {recording
+              ? <div style={{ width:18, height:18, borderRadius:4, background:"#e53935" }}/>
+              : <div style={{ width:22, height:22, borderRadius:"50%", background:"#e53935", boxShadow:"0 0 0 3px rgba(229,57,53,0.3)" }}/>
+            }
+          </button>
+          {/* Play */}
+          <button onClick={togglePlay} disabled={!audioURL}
+            style={{ background:"transparent", border:"none", cursor:audioURL?"pointer":"default", opacity:audioURL?1:0.35, width:44, height:44, display:"flex", alignItems:"center", justifyContent:"center", color:"#444" }}>
+            {playing
+              ? <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              : <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            }
+          </button>
+        </div>
+
+        {/* Confirm */}
+        {audioURL && (
+          <button onClick={()=>onConfirm(audioURL)}
+            style={{ position:"absolute", bottom:16, right:16, background:"transparent", border:"none", cursor:"pointer", color:"#34c759", width:44, height:44, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+        )}
+        {/* Back */}
+        <button onClick={onCancel}
+          style={{ position:"absolute", bottom:16, left:16, background:"transparent", border:"none", cursor:"pointer", color:"#666", width:44, height:44, display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+        </button>
+        {audioURL && <audio ref={audioRef} src={audioURL} onEnded={()=>setPlaying(false)} style={{display:"none"}}/>}
+      </div>
+    </div>
+  );
+}
+
+function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onClose, onDeleteHs, onEditHs, onPlayHs, onRecordHs, onSave, note, onNoteChange }) {
   const containerRef = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [start, setStart] = useState(null);
   const [current, setCurrent] = useState(null);
   const [noteOpen, setNoteOpen] = useState(false);
+  const [recordingHsId, setRecordingHsId] = useState(null);
   const NOTE_MAX = 400;
 
   const pct = (e) => {
@@ -221,12 +400,12 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
       <div style={{ position:"relative", flex:1, overflow:"hidden" }}>
         <div style={{ position:"absolute", top:16, left:16, zIndex:20, display:"flex", flexDirection:"column", gap:8 }}>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <div style={{ background:"rgba(28,28,28,0.92)", borderRadius:8, width:34, height:34, display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:700, fontSize:14, cursor:"pointer", flexShrink:0 }}>?</div>
-            <div style={{ background:"rgba(28,28,28,0.92)", borderRadius:8, padding:"6px 14px", color:"#fff", fontSize:13, fontWeight:500 }}>Drag and drop to select area</div>
+            <div style={{ background:"rgba(28,28,28,0.92)", borderRadius:8, width:44, height:44, display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:700, fontSize:14, cursor:"pointer", flexShrink:0 }}>?</div>
+            <div style={{ background:"rgba(28,28,28,0.92)", borderRadius:8, padding:"6px 14px", color:"#fff", fontSize:12, fontWeight:500 }}>Drag and drop to select area</div>
           </div>
           <button
             onClick={()=>setNoteOpen(o=>!o)}
-            style={{ background:noteOpen?"rgba(91,155,213,0.85)":"rgba(28,28,28,0.92)", borderRadius:8, width:34, height:34, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"background 0.15s" }}
+            style={{ background:noteOpen?"rgba(91,155,213,0.85)":"rgba(28,28,28,0.92)", borderRadius:8, width:44, height:44, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", transition:"background 0.15s" }}
             title="Add note"
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -243,14 +422,15 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
             <button onClick={onSave} style={{ background:"#34c759", color:"#fff", border:"none", borderRadius:12, padding:"12px 26px", fontSize:15, fontWeight:700, cursor:"pointer", boxShadow:"0 4px 20px rgba(52,199,89,0.4)" }}>Save scene</button>
           </div>
         )}
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden", position:"relative" }}>
         <div
           ref={containerRef}
           onMouseDown={onDown}
           onTouchStart={onDown}
           onClick={()=>onFocusHs(null)}
-          style={{ position:"relative", cursor:"crosshair", userSelect:"none", lineHeight:0, width:"100%", height:"100%", touchAction:"none" }}
+          style={{ position:"relative", cursor:"crosshair", userSelect:"none", lineHeight:0, width:"100%", aspectRatio:"4/3", maxHeight:"100%", touchAction:"none", overflow:"hidden", flexShrink:0 }}
         >
-          <img src={imageSrc} alt="" style={{ width:"100%", height:"100%", objectFit:"cover", position:"absolute", inset:0 }} />
+          <img src={imageSrc} alt="" style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} />
           {hotspots.map(hs=>{
             const isFocused = focusHsId === hs.id;
             const barAbove = hs.y > 12;
@@ -261,20 +441,36 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
                   style={{ position:"absolute", left:hs.x+"%", top:hs.y+"%", width:hs.w+"%", height:hs.h+"%", border:isFocused?"2.5px solid rgba(91,155,213,0.9)":"2px solid rgba(255,255,255,0.5)", borderRadius:4, boxSizing:"border-box", background:isFocused?"rgba(91,155,213,0.18)":"transparent", cursor:"pointer", transition:"border 0.12s, background 0.12s" }}
                 />
                 {isFocused && (
-                  <div style={{ position:"absolute", left:hs.x+"%", top: barAbove ? `calc(${hs.y}% - 46px)` : `calc(${hs.y+hs.h}% + 6px)`, zIndex:30, display:"flex", alignItems:"center", gap:6, background:"rgba(18,18,18,0.9)", borderRadius:10, padding:"5px 8px", backdropFilter:"blur(8px)", pointerEvents:"all" }}>
+                  <div style={{ position:"absolute", left:hs.x+"%", top: barAbove ? `calc(${hs.y}% - 58px)` : `calc(${hs.y+hs.h}% + 6px)`, zIndex:30, display:"flex", alignItems:"center", gap:4, background:"rgba(18,18,18,0.9)", borderRadius:12, padding:"6px 8px", backdropFilter:"blur(8px)", pointerEvents:"all" }}>
+                    {/* Delete */}
                     <button className="hs-btn hs-btn-danger" onClick={e=>{e.stopPropagation();onDeleteHs(hs.id);}}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
                     </button>
-                    <div onClick={e=>{e.stopPropagation();onEditHs(hs.id);}} style={{ background:"rgba(50,50,50,0.9)", borderRadius:8, padding:"5px 13px", color:"#fff", fontSize:13, fontWeight:500, cursor:"pointer", maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:60 }}>
-                      {hs.label||<span style={{color:"#999",fontStyle:"italic"}}>Add label…</span>}
+                    {/* Label — full text, no truncation */}
+                    <div onClick={e=>{e.stopPropagation();onEditHs(hs.id);}} style={{ background:"rgba(50,50,50,0.9)", borderRadius:8, padding:"0 13px", color:"#fff", fontSize:12, fontWeight:500, cursor:"pointer", minWidth:60, minHeight:44, display:"flex", alignItems:"center" }}>
+                      {hs.label||<span style={{color:"#999",fontStyle:"italic",fontSize:12}}>Add label…</span>}
+                      {hs.audioURL && <span style={{marginLeft:6, fontSize:10, color:"#7ecf7e"}}>● voice</span>}
                     </div>
-                    <button className="hs-btn" onClick={e=>{e.stopPropagation();onPlayHs(hs.label);}}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+                    {/* Record */}
+                    <button className="hs-btn" onClick={e=>{e.stopPropagation();setRecordingHsId(hs.id);}} title="Record voice">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
                     </button>
+                    {/* Play */}
+                    <button className="hs-btn" onClick={e=>{e.stopPropagation(); hs.audioURL ? onPlayHs(null, hs.audioURL) : onPlayHs(hs.label, null);}} title="Play">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    </button>
+                    {/* Close */}
                     <button className="hs-btn" onClick={e=>{e.stopPropagation();onFocusHs(null);}}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                   </div>
+                )}
+                {/* Voice recorder overlay */}
+                {recordingHsId === hs.id && (
+                  <VoiceRecorder
+                    onConfirm={url=>{ onRecordHs(hs.id, url); setRecordingHsId(null); }}
+                    onCancel={()=>setRecordingHsId(null)}
+                  />
                 )}
               </React.Fragment>
             );
@@ -282,6 +478,7 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
           {draft&&(
             <div style={{ position:"absolute", left:draft.x+"%", top:draft.y+"%", width:draft.w+"%", height:draft.h+"%", border:"2px dashed rgba(255,255,255,0.9)", borderRadius:4, boxSizing:"border-box", background:"rgba(255,255,255,0.07)", pointerEvents:"none" }} />
           )}
+        </div>
         </div>
         {/* Note panel */}
         {noteOpen && (
@@ -308,7 +505,7 @@ function HotspotDrawer({ imageSrc, hotspots, focusHsId, onFocusHs, onDrawn, onCl
                 value={note}
                 onChange={e=>{ if(e.target.value.length<=NOTE_MAX) onNoteChange(e.target.value); }}
                 placeholder="Add a note about this scene…"
-                style={{ width:"100%", boxSizing:"border-box", border:"1.5px solid #dde3ec", borderRadius:10, padding:"10px 14px", fontSize:14, lineHeight:1.5, resize:"none", outline:"none", color:"#222", fontFamily:"inherit", minHeight:72, maxHeight:100 }}
+                style={{ width:"100%", boxSizing:"border-box", border:"1.5px solid #dde3ec", borderRadius:10, padding:"10px 14px", fontSize:12, lineHeight:1.5, resize:"none", outline:"none", color:"#222", fontFamily:"inherit", minHeight:72, maxHeight:100 }}
               />
               {(hotspots.length > 0 || note.trim().length > 0) && (
                 <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
@@ -530,7 +727,7 @@ export default function App() {
         .add-cat-btn:hover{background:#d0e4ff;border-color:#5b9bd5;color:#5b9bd5;}
         .add-scene{display:flex;flex-direction:column;align-items:center;justify-content:center;height:clamp(70px,8vw,100px);border:2px dashed #bbb;border-radius:8px;cursor:pointer;background:#f0f0f0;flex-shrink:0;color:#999;gap:3px;transition:all 0.15s;}
         .add-scene:hover{background:#e0ecff;border-color:#5b9bd5;color:#5b9bd5;}
-        .hs-btn{background:rgba(60,60,60,0.85);border:none;border-radius:7px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background 0.15s;flex-shrink:0;}
+        .hs-btn{background:rgba(60,60,60,0.85);border:none;border-radius:8px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;transition:background 0.15s;flex-shrink:0;font-size:12px;}
         .hs-btn:hover{background:rgba(10,10,10,0.95);}
         .hs-btn-danger:hover{background:rgba(210,45,45,0.9)!important;}
       `}</style>
@@ -591,7 +788,7 @@ export default function App() {
                 if(noteMode){
                   if(isSpeakingNote){ window.speechSynthesis.cancel(); setIsSpeakingNote(false); }
                   else { speak(activeScene.note); setIsSpeakingNote(true); setTimeout(()=>setIsSpeakingNote(false), (activeScene.note?.length||0)*65+500); }
-                } else { speak(activeHs?.label); }
+                } else { if(activeHs?.audioURL){ const a=new Audio(activeHs.audioURL); a.play(); } else speak(activeHs?.label); }
               }}>
               {noteMode&&isSpeakingNote ? "Pause" : "Play"}
               {noteMode&&isSpeakingNote ? (
@@ -648,7 +845,8 @@ export default function App() {
           onClose={cancelWf}
           onDeleteHs={hsId=>{ const upd=wfHotspots.filter(h=>h.id!==hsId); setWfHotspots(upd); setWfFocusHsId(upd.length?upd[upd.length-1].id:null); }}
           onEditHs={hsId=>setWfEditHsId(hsId)}
-          onPlayHs={label=>speak(label)}
+          onPlayHs={(label, url)=>{ if(url){ const a=new Audio(url); a.play(); } else speak(label); }}
+          onRecordHs={(hsId, url)=>{ setWfHotspots(p=>p.map(h=>h.id!==hsId?h:{...h,audioURL:url})); }}
           onSave={handleSaveScene}
           note={wfNote}
           onNoteChange={setWfNote}
@@ -677,5 +875,5 @@ export default function App() {
 const S = {
   overlay:{ position:"fixed", inset:0, zIndex:1000, background:"rgba(0,0,0,0.65)", display:"flex", alignItems:"center", justifyContent:"center", backdropFilter:"blur(3px)" },
   modal:{ position:"relative", boxShadow:"0 20px 60px rgba(0,0,0,0.45)" },
-  closeBtn:{ position:"absolute", top:14, right:14, width:34, height:34, borderRadius:8, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff" },
+  closeBtn:{ position:"absolute", top:14, right:14, width:44, height:44, borderRadius:8, border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff" },
 };
